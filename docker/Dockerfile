@@ -19,6 +19,10 @@ RUN groupadd --gid 1000 vllm \
  && mkdir -p /models \
  && chown vllm:vllm /models
 
+COPY vllm_privacy /opt/vllm_privacy
+COPY logging_config.json /opt/logging_config.json
+ENV PYTHONPATH=/opt
+
 ENV HF_HOME=/models \
     LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4
 
