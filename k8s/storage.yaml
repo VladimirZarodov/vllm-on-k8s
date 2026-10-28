@@ -1,0 +1,17 @@
+# Persistent model storage for vLLM.
+# "standard" is the default hostpath StorageClass of the local Minikube node.
+# The provisioner creates the directory automatically (Immediate binding),
+# so the claim is expected to reach the Bound state right after apply.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache
+  labels:
+    app: vllm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 8Gi

@@ -1,0 +1,33 @@
+# Tunables that can change without rebuilding the Docker image.
+# Never put real tokens here - they belong to the vllm-secrets Secret,
+# which is created manually (see README) and is NOT part of Kustomize.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-config
+  labels:
+    app: vllm
+data:
+  # --- model downloader (initContainer, scripts/download_model.py) ---
+  MODEL_REPO: "Qwen/Qwen2.5-0.5B-Instruct"
+  MODEL_DIR: "/models/model"
+
+  # --- vllm serve parameters (main container CLI args) ---
+  # API_PORT must stay in sync with containerPort/probes/Service (8000).
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  DTYPE: "bfloat16"
+  MAX_MODEL_LEN: "1024"
+  MAX_NUM_SEQS: "4"
+  MAX_NUM_BATCHED_TOKENS: "1024"
+  SERVED_MODEL_NAME: "qwen2.5-0.5b-instruct"
+  LOGGING_CONFIG_FILE: "/opt/logging_config.json"
+  # KV-cache pool size in BYTES (256 MiB), passed as
+  # --kv-cache-memory-bytes. vLLM 0.32.0 CPU prefers VLLM_CPU_KVCACHE_SPACE,
+  # but it only accepts whole GiB (1 GiB did not fit when this was tuned).
+  # Real demand: Qwen2.5-0.5B uses ~12 KiB/token of KV (24 layers x 2 kv
+  # heads x 64 dims x 2 bf16 bytes x K+V), so 256 MiB caches ~21k tokens -
+  # far beyond 4 concurrent 1024-token sequences.
+  # NOTE: when VLLM_CPU_KVCACHE_SPACE is set it OVERRIDES the CLI flag,
+  # so it must stay unset in the container env.
+  KV_CACHE_MEMORY_BYTES: "268435456"

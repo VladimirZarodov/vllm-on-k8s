@@ -1,0 +1,244 @@
+# vLLM CPU server: initContainer downloads the model into the PVC,
+# the main container serves it from the local path (never from HF).
+#
+# Prerequisite: Secret vllm-secrets with keys HF_TOKEN and VLLM_API_KEY
+# must already exist in the namespace (created via kubectl, see README).
+# Without it pods stay in CreateContainerConfigError by design -
+# no placeholder secret values are committed to the repository.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  labels:
+    app: vllm
+spec:
+  # One replica with Recreate: the PVC is ReadWriteOnce (single writer),
+  # and two vLLM servers would not fit into the 4608 MB Minikube memory.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+    spec:
+      # Kubernetes would inject VLLM_SERVICE_HOST/VLLM_PORT_* env vars because
+      # the Service is named "vllm"; vLLM treats unknown VLLM_* vars as config
+      # errors in strict mode. Switch the injection off entirely.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        # fsGroup makes the hostpath volume writable for UID/GID 1000
+        # so neither the downloader nor vLLM need to run as root.
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            # equivalent of the local `docker run --shm-size=512m`
+            sizeLimit: 512Mi
+      initContainers:
+        - name: model-downloader
+          image: docker.io/library/vllm-cpu:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/opt/scripts/download_model.py"]
+          env:
+            - name: MODEL_REPO
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MODEL_REPO
+            - name: MODEL_DIR
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MODEL_DIR
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-secrets
+                  key: HF_TOKEN
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 768Mi
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+      containers:
+        - name: vllm
+          image: docker.io/library/vllm-cpu:dev
+          imagePullPolicy: IfNotPresent
+          # Appended to the image ENTRYPOINT ["vllm", "serve"].
+          # $(VAR) references are expanded by kubelet from this container's
+          # env (ConfigMap/Secret); the ENTRYPOINT is exec-form, no shell is
+          # involved. All CLI flags below were verified against
+          # `vllm serve --help=all` of vLLM 0.32.0 in this image.
+          args:
+            - "$(MODEL_DIR)"
+            - "--host"
+            - "$(API_HOST)"
+            - "--port"
+            - "$(API_PORT)"
+            - "--dtype"
+            - "$(DTYPE)"
+            - "--max-model-len"
+            - "$(MAX_MODEL_LEN)"
+            - "--max-num-seqs"
+            - "$(MAX_NUM_SEQS)"
+            - "--max-num-batched-tokens"
+            - "$(MAX_NUM_BATCHED_TOKENS)"
+            - "--served-model-name"
+            - "$(SERVED_MODEL_NAME)"
+            - "--enforce-eager"
+            - "--kv-cache-memory-bytes"
+            - "$(KV_CACHE_MEMORY_BYTES)"
+            - "--logging-config.pylogging_config_file"
+            - "$(LOGGING_CONFIG_FILE)"
+          env:
+            # Values referenced by $(VAR) above must live in `env:`.
+            - name: MODEL_DIR
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MODEL_DIR
+            - name: API_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: API_HOST
+            - name: API_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: API_PORT
+            - name: DTYPE
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: DTYPE
+            - name: MAX_MODEL_LEN
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_MODEL_LEN
+            - name: MAX_NUM_SEQS
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_NUM_SEQS
+            - name: MAX_NUM_BATCHED_TOKENS
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_NUM_BATCHED_TOKENS
+            - name: SERVED_MODEL_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: SERVED_MODEL_NAME
+            - name: LOGGING_CONFIG_FILE
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: LOGGING_CONFIG_FILE
+            # KV-cache pool in bytes (see configmap note). The env var
+            # VLLM_CPU_KVCACHE_SPACE must NOT be set: if present it
+            # overrides --kv-cache-memory-bytes with whole-GiB values.
+            - name: KV_CACHE_MEMORY_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: KV_CACHE_MEMORY_BYTES
+            # Force offline model loading: vLLM must never re-download.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            # tcmalloc (already present in the image, no rebuild) drastically
+            # reduces and de-fragments glibc malloc RSS for the 3 vLLM CPU
+            # processes. Measured locally: peak anon ~4.3 GiB vs ~4.9 GiB with
+            # the default allocator for the same seqs=4/KV256MiB config.
+            - name: LD_PRELOAD
+              value: "libtcmalloc_minimal.so.4"
+            # vLLM 0.32.0 enables Bearer auth from VLLM_API_KEY directly
+            # (vllm/entrypoints/serve/middleware/register.py). It is kept
+            # out of `args` so it does not appear in the process cmdline
+            # or in the "non-default arguments" startup log line.
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-secrets
+                  key: VLLM_API_KEY
+          ports:
+            - name: http
+              containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2600Mi
+            limits:
+              cpu: "4"
+              # Measured with `docker run -m` against the exact image/config
+              # below (seqs=4, batched=1024, KV=256Mi, tcmalloc preloaded):
+              # steady anon ~4.1 GiB, high-water 4.3 GiB during the first real
+              # generation, swap 0, request completed 200. 4500Mi is that
+              # ceiling + headroom; it fits into the Minikube container
+              # (5400MiB) together with ~650 MiB of control-plane/kube-system
+              # load. The container's default glibc allocator needed ~4.9 GiB
+              # for the same workload - do not drop LD_PRELOAD.
+              memory: 4500Mi
+          # Model loading on CPU takes minutes: startupProbe carries that,
+          # so readiness/liveness only start after the server is up.
+          # /health is NOT behind the API key (GUARDED_PREFIX is /v1,/v2,
+          # /inference,/cohere), so plain HTTP probes work.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            # First cold load on this tiny VM took > 10 minutes once;
+            # 240 x 5s = 20 minutes budget. A probe-kill during loading
+            # leaks /dev/shm segments (emptyDir survives container
+            # restarts), so give the load generous time.
+            failureThreshold: 240
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+            - name: dshm
+              mountPath: /dev/shm

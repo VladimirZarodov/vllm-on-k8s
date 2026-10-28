@@ -1,0 +1,5 @@
+# Local scratch and build artifacts (not model data)
+.checks/
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,16 @@
+# Cluster-internal access to the vLLM OpenAI-compatible API.
+# For local access from Windows use: kubectl port-forward (see README).
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  labels:
+    app: vllm
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

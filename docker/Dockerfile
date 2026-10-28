@@ -21,6 +21,7 @@ RUN groupadd --gid 1000 vllm \
 
 COPY vllm_privacy /opt/vllm_privacy
 COPY logging_config.json /opt/logging_config.json
+COPY scripts /opt/scripts
 ENV PYTHONPATH=/opt
 
 ENV HF_HOME=/models \

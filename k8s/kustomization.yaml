@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Applied to every namespaced resource below; namespace.yaml itself
+# carries the real name.
+namespace: vllm
+
+resources:
+  - namespace.yaml
+  - storage.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+
+# NOTE: the Secret vllm-secrets is intentionally NOT generated here.
+# Its values (HF_TOKEN, VLLM_API_KEY) must never enter the repository.
+# Create it before `kubectl apply -k k8s/` as described in README.md:
+#   kubectl create secret generic vllm-secrets -n vllm `
+#     --from-literal=HF_TOKEN="$env:HF_TOKEN" `
+#     --from-literal=VLLM_API_KEY="$env:VLLM_API_KEY" `
+#     --dry-run=client -o yaml | kubectl apply -f -
