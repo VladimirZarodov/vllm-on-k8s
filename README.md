@@ -11,12 +11,11 @@
 Minikube (driver=docker)
 └── namespace vllm
     ├── PVC model-cache (8Gi, storageClass standard, hostpath) → /models
-    ├── Secret vllm-secrets (HF_TOKEN, VLLM_API_KEY)   ← создаётся вручную, НЕ в git
-    ├── ConfigMap vllm-config (параметры vLLM)          ← значения только для ConfigMap, без секретов
+    ├── Secret vllm-secrets (HF_TOKEN, VLLM_API_KEY)   
+    ├── ConfigMap vllm-config (параметры vLLM)          
     ├── Deployment vllm (1 реплика, strategy Recreate)
-    │   ├── initContainer model-downloader: python /opt/scripts/download_model.py
-    │   │     1-й запуск: HF → PVC, проверка файлов, маркер .model_ready.json
-    │   │     далее:      маркер+файлы валидны → выход без сети
+    │   ├── initContainer model-downloader: python /opt/scripts/download_model.py    
+    │   │     
     │   └── container vllm: vllm serve /models/model (локальный путь, HF_HUB_OFFLINE=1)
     └── Service vllm (ClusterIP :8000) → kubectl port-forward
 ```
@@ -60,11 +59,11 @@ Minikube (driver=docker)
   контрол-плейн Kubernetes;
 - `minikube`, `kubectl` в `PATH`;
 - Python 3.12 на хосте — только для запуска тестов;
-- образ `vllm-cpu:dev` собирается локально (требует ~6 ГБ свободного места).
+- Образ `vllm-cpu:dev` собирается локально (требует ~6 ГБ свободного места).
 
 ## 1. Сборка образа и запуск Minikube
 
-Все команды выполняются в корне репозитория `vllm-task`.
+Все команды выполняются в корне репозитория.
 
 ```powershell
 # сборка rootless-образа (pip-слой кешируется, повторная сборка быстрая)
@@ -81,10 +80,6 @@ docker update --memory 5400m --memory-swap 6100m minikube
 minikube image load vllm-cpu:dev
 minikube image ls | Select-String vllm-cpu    # должно показать docker.io/library/vllm-cpu:dev
 ```
-
-Если меняете содержимое `scripts/` или `vllm_privacy/` — пересоберите образ и
-**заново загрузите его в Minikube**, затем `kubectl rollout restart deployment
-vllm -n vllm`, иначе в кластере останется старая версия.
 
 ## 2. Namespace и Secret (обязательная подготовка)
 
